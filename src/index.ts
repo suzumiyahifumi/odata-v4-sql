@@ -4,8 +4,11 @@ import { filter, query } from "odata-v4-parser";
 import { Token } from "odata-v4-parser/lib/lexer";
 
 export interface SqlOptions{
+	mainModel: any;
+    preModel: any;
     useParameters?:boolean
     type?:SQLLang
+    schema?:object
 }
 
 /**
@@ -23,7 +26,7 @@ export function createQuery(odataQuery:Token, options?:SqlOptions, type?:SQLLang
 export function createQuery(odataQuery:string | Token, options = <SqlOptions>{}, type?:SQLLang):Visitor{
     if (typeof type != "undefined" && type) options.type = type;
     let ast:Token = <Token>(typeof odataQuery == "string" ? query(<string>odataQuery) : odataQuery);
-    return new Visitor(options).Visit(ast).asType();
+    return new Visitor(options).Visit(ast);
 }
 
 /**
@@ -41,5 +44,5 @@ export function createFilter(odataFilter:Token, options?:SqlOptions, type?:SQLLa
 export function createFilter(odataFilter:string | Token, options = <SqlOptions>{}, type?:SQLLang):Visitor{
     if (typeof type != "undefined" && type) options.type = type;
     let ast:Token = <Token>(typeof odataFilter == "string" ? filter(<string>odataFilter) : odataFilter);
-    return new Visitor(options).Visit(ast).asType();
+    return new Visitor(options).Visit(ast);
 }

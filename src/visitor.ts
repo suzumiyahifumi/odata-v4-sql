@@ -1,6 +1,8 @@
 import { Token } from "odata-v4-parser/lib/lexer";
 import { Literal } from "odata-v4-literal";
 import { SqlOptions } from "./index";
+import { Op, Sequelize } from 'sequelize';
+var _ = require('lodash');
 
 export class SQLLiteral extends Literal{
 	static convert(type:string, value:string):any {
@@ -31,26 +33,63 @@ export enum SQLLang{
 
 export class Visitor{
 	protected options:SqlOptions
-	type:SQLLang;
-	select:string = "";
-	where:string = "";
-	orderby:string = "";
-	skip:number
+	protected schema:object
+	isInclude: boolean = false;
+	mainModel: string;
+	preModel: string;
+	type: SQLLang;
+	attributes = [];
+	where: object = {};
+	order: Array<Array<string>> = [['id', 'ASC']];
+	offset:number
 	limit:number
 	inlinecount:boolean
 	navigationProperty:string
-	includes:Visitor[] = [];
+	include:Visitor[] = [];
 	parameters:any = new Map();
 	protected parameterSeed:number = 0;
 	protected originalWhere:string;
 	ast:Token
 
 	constructor(options = <SqlOptions>{}){
+		this.mainModel = options.mainModel;
+		this.preModel = options.preModel;
+
 		this.options = options;
+		this.schema = options.schema || {};
 		if (this.options.useParameters != false) this.options.useParameters = true;
 		this.type = options.type || SQLLang.ANSI;
+	//	console.log('mainModel',this.mainModel)
 	}
 
+	from() {
+		let from_ = _.pick(this, ['where', 'order', 'offset', 'limit', 'include', 'attributes', 'model', 'as', 'separate', 'required', 'nested'])
+		if (from_.attributes.length == 0) {
+			console.log('[[isInclude]]', this.isInclude, '[[preModel]]', this.preModel, "[[mainModel]]", this.mainModel)
+			let n = (this.isInclude == true) ? this.getIncludeAliasName(this.preModel, this.mainModel).name : this.changeModel2Singular(this.mainModel).name;
+			console.log('[[n]]', n)
+			from_.attributes = {
+				include: [
+					[(this.isInclude == true) ? 'id' : Sequelize.literal(`"${n}"."id"`), '@iot_id']
+				],
+				exclude: ['id']
+			}
+		} else if (from_.attributes.indexOf('id') >= 0){
+			console.log('[[mainModel]]', `${this.changeModel2Singular(this.mainModel).name}.id`)
+			from_.attributes[from_.attributes.indexOf('id')] = ['id', '@iot_id'];
+			let n = this.changeModel2Singular(this.mainModel).name;
+			from_.attributes = {
+				include: [
+					[Sequelize.literal((n == null)? 'id' :`${n}.id`), '@iot_id'], ...from_.attributes
+				],
+				exclude: ['id']
+			}
+		}
+		if (from_.include.length == 0) delete from_.include;
+	//	from_.raw = true;
+		return from_;
+	}
+/*
 	from(table:string){
 		let sql = `SELECT ${this.select} FROM [${table}] WHERE ${this.where} ORDER BY ${this.orderby}`;
 		switch (this.type){
@@ -71,7 +110,8 @@ export class Visitor{
 		}
 		return sql;
 	}
-
+*/
+/*
 	asMsSql(){
 		this.type = SQLLang.MsSql;
 		let rx = new RegExp("\\?", "g");
@@ -91,41 +131,191 @@ export class Visitor{
     this.includes.forEach((item) => item.asOracleSql());
     return this;
   }
-
+*/
 	asAnsiSql(){
 		this.type = SQLLang.ANSI;
-		this.where = this.originalWhere || this.where;
-		this.includes.forEach((item) => item.asAnsiSql());
+		//this.where = this.originalWhere || this.where;
+		this.include.forEach((item) => item.asAnsiSql());
 		return this;
 	}
 
 	asType(){
 		switch (this.type){
-			case SQLLang.MsSql: return this.asMsSql();
+		//	case SQLLang.MsSql: return this.asMsSql();
 			case SQLLang.ANSI:
 			case SQLLang.MySql:
 			case SQLLang.PostgreSql: return this.asAnsiSql();
-			case SQLLang.Oracle: return this.asOracleSql();
+		//	case SQLLang.Oracle: return this.asOracleSql();
 			default: return this;
 		}
 	}
 
-	Visit(node:Token, context?:any){
+	Visit(node:Token, context?:any):any {
 		this.ast = this.ast || node;
 		context = context || { target: "where" };
+	//	console.log(node)
 
-		if (node){
-			var visitor = this[`Visit${node.type}`];
-			if (visitor) visitor.call(this, node, context);
-			else console.log(`Unhandled node type: ${node.type}`, node);
-		}
 
-		if (node == this.ast){
-			if (!this.select) this.select = `*`;
-			if (!this.where) this.where = "1 = 1";
-			if (!this.orderby) this.orderby = "1";
+		var visitor = this[`Visit${node.type}`];
+		let next = visitor.call(this, node, context);
+		return (node == this.ast)? this:next;
+	}
+
+	protected changeModel2Singular(type: string) {
+		let type2 = type.toLowerCase();
+		switch (type2) {
+			case "things":
+				return {
+					name: "thing", nameOri: type, isModel: true
+				};
+			case "locations":
+				return {
+					name: "location", nameOri: type, isModel: true
+				};
+			case "historicallocations":
+				return {
+					name: "historicallocation", nameOri: type, isModel: true
+				};
+			case "datastreams":
+				return {
+					name: "datastream", nameOri: type, isModel: true
+				};
+			case "sensors":
+				return {
+					name: "sensor", nameOri: type, isModel: true
+				};
+			case "observedproperties":
+				return {
+					name: "observedproperty", nameOri: type, isModel: true
+				};
+			case "observations":
+				return {
+					name: "observation", nameOri: type, isModel: true
+				};
+			case "featuresofinterest":
+				return {
+					name: "featureofinterest", nameOri: type, isModel: true
+				};
+			default:
+				return (["thing", "location", "historicallocation", "datastream", "sensor", "observedproperty", "observation", "featureofinterest"].includes(type2)) ? {
+					name: type2,
+					nameOri: type,
+					isModel: true
+				} : (type2.split(".").length > 1)? {
+					name: null,
+					nameOri: type,
+					isModel: true
+				} : {
+					name: null,
+					nameOri: type,
+					isModel: false
+				};
 		}
-		return this;
+	}
+	protected getIncludeAliasName(mainModel: string, expandModel: string) {
+		let ex = expandModel.toLowerCase();
+		let me = mainModel.toLowerCase();
+		let map = {
+			'thing': {
+				'location': {
+					name: 'locations',
+					through: true,
+					separate: false
+				},
+				'datastream': 'datastreams'
+			},
+			'location': {
+				'thing': {
+					name: 'things',
+					through: true,
+					separate: false
+				}
+			},
+			'sensor': {
+				'datastream': 'datastreams'
+			},
+			'observedproperty': {
+				'datastream': {
+					name: 'datastreams',
+					through: false,
+					separate: true
+				}
+			},
+			'featureofinterest': {
+				'observation': {
+					name: 'observations',
+					through: false,
+					separate: true
+				}
+			},
+			'datastream': {
+				'thing': 'fk_thing_in_datastream',
+				'sensor': 'fk_sensor_in_datastream',
+				'observedproperty': 'fk_observedproperty_in_datastream',
+				'observation': {
+					name: 'observations',
+					through: false,
+					separate: true
+				}
+			},
+			'observation': {
+				'datastream': 'fk_data_in_obs',
+				'featureofinterest': 'fk_foi_in_obs'
+			},
+			'historicallocation': {
+				'thing': 'fk_thing_in_historicallocation'
+			},
+			'things': {
+				'location': {
+					name: 'locations',
+					through: true,
+					separate: false
+				}, 'datastream': 'datastreams' },
+			'locations': {
+				'thing': {
+					name: 'things',
+					through: true,
+					separate: false
+				} },
+			'sensors': { 'datastream': 'datastreams' },
+			'observedproperties': {
+				'datastream': {
+					name: 'datastreams',
+					through: false,
+					separate: true
+				}
+			},
+			'featuresofinterest': {
+				'observation': {
+					name: 'observations',
+					through: false,
+					separate: true
+				}
+			},
+			'datastreams': {
+				'thing': 'fk_thing_in_datastream',
+				'sensor': 'fk_sensor_in_datastream',
+				'observedproperty': 'fk_observedproperty_in_datastream',
+				'observation': {
+					name: 'observations',
+					through: false,
+					separate: true
+				}
+			},
+			'observations': {
+				'datastream': 'fk_data_in_obs',
+				'featureofinterest': 'fk_foi_in_obs'
+			},
+			'historicallocations': {
+				'thing': 'fk_thing_in_historicallocation'
+			}
+		}
+		let re = (typeof map[me][ex] == 'string') ? { name: map[me][ex], through: false, separate: false } : map[me][ex]
+		return re || {
+			name: ex,
+			through: false,
+			separate: false
+		};
 	}
 
 	protected VisitODataUri(node:Token, context:any){
@@ -134,30 +324,120 @@ export class Visitor{
 	}
 
 	protected VisitExpand(node: Token, context: any) {
-        node.value.items.forEach((item) => {
-            let expandPath = item.value.path.raw;
-            let visitor = this.includes.filter(v => v.navigationProperty == expandPath)[0];
-            if (!visitor){
-                visitor = new Visitor(this.options);
-				visitor.parameterSeed = this.parameterSeed;
-                this.includes.push(visitor);
-            }
-            visitor.Visit(item);
-			this.parameterSeed = visitor.parameterSeed;
-        });
+		type pathPair = { type: string; raw: string, include: any };
+		let modelList:{} = {};
+		let includesArray:Array<pathPair[]> = node.value.items.map((item) => {
+			let pathArray:pathPair[] = this.Visit(item.value.path);
+			let m = pathArray[pathArray.length - 1].raw;
+			let singular = this.changeModel2Singular(m).name;
+			let mainModel = this.changeModel2Singular((pathArray.length > 1) ? pathArray[pathArray.length - 2].raw : this.options.mainModel).name;
+			let aliasName = this.getIncludeAliasName(mainModel, singular);
+			let include = {
+				model: this.schema[singular],
+				as: aliasName.name,
+				separate: aliasName.separate,
+				required: false,
+				nested: true,
+				...this.Visit(item, singular).from()
+			};
+			if (aliasName.through == true) include.through = {
+				attributes: []
+			}
+			modelList[m] = include;
+			pathArray[pathArray.length - 1].include = include;
+			return pathArray;
+		}).sort((a, b) => {
+			return a.length - b.length;
+		});
+		let modelRoot:Array<string> = [];
+
+		for (let i = 0; i < includesArray.length; i++) {
+			for (let index = 0; index < includesArray[i].length; index++){
+				let path = includesArray[i][index];
+				if (index == 0) modelRoot.push(path.raw);
+				if (modelList[path.raw]) { 
+					if (index != 0) {
+						if (modelList[includesArray[i][index - 1].raw].include == undefined) modelList[includesArray[i][index - 1].raw].include = [];
+						modelList[includesArray[i][index - 1].raw].include.push(modelList[path.raw]);
+					}
+				} else if (path.type == "ComplexProperty") {
+					let singular = this.changeModel2Singular(path.raw).name;
+					let mainModel = this.changeModel2Singular((index == 0) ? this.options.mainModel : includesArray[i][index - 1].raw).name;
+					let aliasName = this.getIncludeAliasName(mainModel, singular);
+					let include = {
+						model: this.schema[singular],
+						as: aliasName.name,
+						separate: aliasName.separate,
+						required: false,
+						nested: true,
+						order: [['id', 'ASC']]
+					};
+					if (aliasName.through == true) include["through"] = {
+						attributes: []
+					}
+					modelList[path.raw] = include;
+					
+					if (index != 0) {
+						if (modelList[includesArray[i][index - 1].raw].include == undefined) modelList[includesArray[i][index - 1].raw].include = [];
+						modelList[includesArray[i][index - 1].raw].include.push(modelList[path.raw]);
+					}
+				}
+			};
+		}
+
+		let includes = _.uniq(modelRoot).map(model => modelList[model]);
+
+	//	console.log("[[includes]]",includes.include[0].include[0])
+
+		return includes;
     }
 
     protected VisitExpandItem(node: Token, context: any) {
-        this.Visit(node.value.path, context);
-        if (node.value.options) node.value.options.forEach((item) => this.Visit(item, context));
+    //	this.Visit(node.value.path, context);
+		node.type = "QueryOptions";
+		let options = {
+			preModel: this.mainModel,
+			...this.options
+		}
+		options.mainModel = context;
+		let visitor = new Visitor(options).Visit(node);
+		visitor.isInclude = true;
+	//	if (node.value.options) visitor.VisitQueryOptions(node, context);
+		return visitor;
     }
 
     protected VisitExpandPath(node: Token, context: any) {
+		console.log("[[VisitExpandPath]]", JSON.stringify(node, undefined, "\t"));
+		let pathArray = node.value.map(item => {
+			return {
+				type: item.type,
+				raw: item.raw
+			}
+		});
         this.navigationProperty = node.raw;
+		return pathArray;
     }
 
 	protected VisitQueryOptions(node:Token, context:any){
-		node.value.options.forEach((option) => this.Visit(option, context));
+		if (!node.value.options) return;
+		node.value.options.forEach((option) => {
+			let op:any = this.Visit(option, context);
+			switch (option.type){
+				case "Filter": this.where = op; break;
+				case "OrderBy": this.order = op; break;
+				case "Top": this.limit = op; break;
+				case "Skip": this.offset = op; break;
+				case "InlineCount": this.inlinecount = op; break;
+				case "Select": this.attributes = op; break;
+				case "Expand": this.include = op; break;
+			//	case "Format": this.format = op; break;
+			//	case "Count": this.count = op; break;
+			//	case "Apply": this.apply = op; break;
+			//	case "Search": this.search = op; break;
+			//	case "Compute": this.compute = op; break;
+			}
+		//	return this.Visit(option, context);
+		});
 	}
 
 	protected VisitInlineCount(node:Token, context:any){
@@ -166,244 +446,208 @@ export class Visitor{
 
 	protected VisitFilter(node:Token, context:any){
 		context.target = "where";
-		this.Visit(node.value, context);
-		if (!this.where) this.where = "1 = 1";
+		return this.Visit(node.value, context);
+	//	if (!this.where) this.where[Op.and] = Sequelize.literal('(1 = 1)');
 	}
 
 	protected VisitOrderBy(node:Token, context:any){
 		context.target = "orderby";
-		node.value.items.forEach((item, i) => {
-			this.Visit(item, context);
-			if (i < node.value.items.length - 1) this.orderby += ", ";
+		let orderBy: Array<string> = node.value.items.map((item, i) => {
+			return this.Visit(item, context);
 		});
+		return orderBy;
 	}
 
 	protected VisitOrderByItem(node:Token, context:any){
-		this.Visit(node.value.expr, context);
-		this.orderby += node.value.direction > 0 ? " ASC" : " DESC";
+	//	this.Visit(node.value.expr, context);
+		return node.raw.split(' ');
 	}
 
 	protected VisitSkip(node:Token, context:any){
-		this.skip = +node.value.raw;
+		return Number(node.value.raw);
 	}
 
 	protected VisitTop(node:Token, context:any){
-		this.limit = +node.value.raw;
+		return Number(node.value.raw);
 	}
 
 	protected VisitSelect(node:Token, context:any){
 		context.target = "select";
-		node.value.items.forEach((item, i) => {
-			this.Visit(item, context);
-			if (i < node.value.items.length - 1) this.select += ", ";
+		let attributes: Array<string> = node.value.items.map((item, i) => {
+			return this.Visit(item, context);
 		});
+		return attributes;
 	}
 
 	protected VisitSelectItem(node:Token, context:any){
 		let item = node.raw.replace(/\//g, '.');
-		this.select += `[${item}]`;
+		return `${item}`;
 	}
 
 	protected VisitAndExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " AND ";
-		this.Visit(node.value.right, context);
+		// return { [Op.and]: [] }
+		let and: object = {};
+		let left: object = this.Visit(node.value.left, context);
+		let right: object = this.Visit(node.value.right, context);
+		and[Op.and] = [left, right];
+		return and;
 	}
 
 	protected VisitOrExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " OR ";
-		this.Visit(node.value.right, context);
+		let or:object = {};
+		let left:object = this.Visit(node.value.left, context);
+		let right:object = this.Visit(node.value.right, context);
+		or[Op.or] = [left, right];
+		return or;
 	}
 
 	protected VisitBoolParenExpression(node:Token, context:any){
-		this.where += "(";
-		this.Visit(node.value, context);
-		this.where += ")";
+		return this.Visit(node.value, context);
 	}
 
 	protected VisitCommonExpression(node:Token, context:any){
-		this.Visit(node.value, context);
+		return this.Visit(node.value, context);
 	}
 
 	protected VisitFirstMemberExpression(node:Token, context:any){
-		this.Visit(node.value, context);
+		return this.Visit(node.value, context);
 	}
 
 	protected VisitMemberExpression(node:Token, context:any){
-		this.Visit(node.value, context);
+		return this.Visit(node.value, context);
 	}
 
 	protected VisitPropertyPathExpression(node:Token, context:any){
 		if (node.value.current && node.value.next){
-			this.Visit(node.value.current, context);
-			context.identifier += ".";
-			this.Visit(node.value.next, context);
-		}else this.Visit(node.value, context);
+			return `${this.Visit(node.value.current, context)}.${this.Visit(node.value.next, context)}`
+		} else {
+			return `${this.Visit(node.value, context)}`;
+		}
 	}
 
 	protected VisitSingleNavigationExpression(node:Token, context:any){
-		if (node.value.current && node.value.next){
-			this.Visit(node.value.current, context);
-			this.Visit(node.value.next, context);
-		}else this.Visit(node.value, context);
+		if (node.value.current && node.value.next) {
+			return `${this.Visit(node.value.current, context)}.${this.Visit(node.value.next, context)}`
+		} else {
+			return `${this.Visit(node.value, context)}`;
+		}
 	}
 
 	protected VisitODataIdentifier(node:Token, context:any){
-		this[context.target] += `[${node.value.name}]`;
-		context.identifier = node.value.name;
+		return `${node.value.name}`;
 	}
 
 	protected VisitEqualsExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " = ";
-		this.Visit(node.value.right, context);
-		if (this.options.useParameters && context.literal == null){
-			this.where = this.where.replace(/= \?$/, "IS NULL").replace(new RegExp(`\\? = \\[${context.identifier}\\]$`), `[${context.identifier}] IS NULL`);
-		}else if (context.literal == "NULL"){
-			this.where = this.where.replace(/= NULL$/, "IS NULL").replace(new RegExp(`NULL = \\[${context.identifier}\\]$`), `[${context.identifier}] IS NULL`);
-		}
+		let eq:object = {};
+		let left = this.Visit(node.value.left, context);
+		eq[`${left}`] = {
+			[Op.eq]: this.Visit(node.value.right, context)
+		};
+		return eq;
 	}
 
 	protected VisitNotEqualsExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " <> ";
-		this.Visit(node.value.right, context);
-		if (this.options.useParameters && context.literal == null){
-			this.where = this.where.replace(/<> \?$/, "IS NOT NULL").replace(new RegExp(`\\? <> \\[${context.identifier}\\]$`), `[${context.identifier}] IS NOT NULL`);
-		}else if (context.literal == "NULL"){
-			this.where = this.where.replace(/<> NULL$/, "IS NOT NULL").replace(new RegExp(`NULL <> \\[${context.identifier}\\]$`), `[${context.identifier}] IS NOT NULL`);
-		}
+		let ne: object = {};
+		let left = this.Visit(node.value.left, context);
+		ne[`${left}`] = {
+			[Op.ne]: this.Visit(node.value.right, context)
+		};
+		return ne;
 	}
 
 	protected VisitLesserThanExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " < ";
-		this.Visit(node.value.right, context);
+		let ne: object = {};
+		let left = this.Visit(node.value.left, context);
+		ne[`${left}`] = {
+			[Op.ne]: this.Visit(node.value.right, context)
+		};
+		return ne;
 	}
 
 	protected VisitLesserOrEqualsExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " <= ";
-		this.Visit(node.value.right, context);
+		let lte: object = {};
+		let left = this.Visit(node.value.left, context);
+		lte[`${left}`] = {
+			[Op.lte]: this.Visit(node.value.right, context)
+		};
+		return lte;
 	}
 
 	protected VisitGreaterThanExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " > ";
-		this.Visit(node.value.right, context);
+		let gt: object = {};
+		let left = this.Visit(node.value.left, context);
+		gt[`${left}`] = {
+			[Op.gt]: this.Visit(node.value.right, context)
+		};
+		return gt;
 	}
 
 	protected VisitGreaterOrEqualsExpression(node:Token, context:any){
-		this.Visit(node.value.left, context);
-		this.where += " >= ";
-		this.Visit(node.value.right, context);
+		let gte: object = {};
+		let left = this.Visit(node.value.left, context);
+		gte[`${left}`] = {
+			[Op.gte]: this.Visit(node.value.right, context)
+		};
+		return gte;
 	}
 
 	protected VisitLiteral(node:Token, context:any){
-		if (this.options.useParameters){
-			let name = `p${this.parameterSeed++}`;
-			let value = Literal.convert(node.value, node.raw);
-			context.literal = value;
-			this.parameters.set(name, value);
-			this.where += "?";
-		}else this.where += (context.literal = SQLLiteral.convert(node.value, node.raw));
+		let value = SQLLiteral.convert(node.value, node.raw);
+		return value;
 	}
 
 	protected VisitMethodCallExpression(node:Token, context:any){
 		var method = node.value.method;
 		var params = node.value.parameters || [];
+		let param1: any;
 		switch (method){
 			case "contains":
-				this.Visit(params[0], context);
-				if (this.options.useParameters){
-					let name = `p${this.parameterSeed++}`;
-					let value = Literal.convert(params[1].value, params[1].raw);
-					this.parameters.set(name, `%${value}%`);
-					this.where += " like ?";
-				}else this.where += ` like '%${SQLLiteral.convert(params[1].value, params[1].raw).slice(1, -1)}%'`;
-				break;
+				let contains = {};
+				param1 = this.Visit(params[0], context);
+				contains[param1] = {};
+				contains[param1][Op.contains] = this.Visit(params[1], context);
+				return contains;
 			case "endswith":
-				this.Visit(params[0], context);
-				if (this.options.useParameters){
-					let name = `p${this.parameterSeed++}`;
-					let value = Literal.convert(params[1].value, params[1].raw);
-					this.parameters.set(name, `%${value}`);
-					this.where += " like ?";
-				}else this.where += ` like '%${SQLLiteral.convert(params[1].value, params[1].raw).slice(1, -1)}'`;
-				break;
+				let endswith = {};
+				param1 = this.Visit(params[0], context);
+				endswith[param1] = {};
+				endswith[param1][Op.endsWith] = this.Visit(params[1], context);
+				return endswith;
 			case "startswith":
-				this.Visit(params[0], context);
-				if (this.options.useParameters){
-					let name = `p${this.parameterSeed++}`;
-					let value = Literal.convert(params[1].value, params[1].raw);
-					this.parameters.set(name, `${value}%`);
-					this.where += " like ?";
-				}else this.where += ` like '${SQLLiteral.convert(params[1].value, params[1].raw).slice(1, -1)}%'`;
-				break;
+				let startswith = {};
+				param1 = this.Visit(params[0], context);
+				startswith[param1] = {};
+				startswith[param1][Op.startsWith] = this.Visit(params[1], context);
+				return startswith;
 			case "indexof":
-				let fn = "";
-				switch (this.type) {
-					case SQLLang.MsSql:
-						fn = "CHARINDEX";
-						break;
-					case SQLLang.ANSI:
-					case SQLLang.MySql:
-					case SQLLang.PostgreSql:
-					default:
-						fn = "INSTR";
-						break;
-				}
-				if (fn === "CHARINDEX"){
-					const tmp = params[0];
-					params[0] = params[1];
-					params[1] = tmp;
-				}
-				this.where += `${fn}(`;
-				this.Visit(params[0], context);
-				this.where += ', ';
-				this.Visit(params[1], context);
-				this.where += ") - 1";
 				break;
 			case "round":
-				this.where += "ROUND(";
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 			case "length":
-				this.where += "LEN(";
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 			case "tolower":
-				this.where += "LCASE(";
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 			case "toupper":
-				this.where += "UCASE(";
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 			case "floor":
+				break;
 			case "ceiling":
+				break;
 			case "year":
+				break;
 			case "month":
+				break;
 			case "day":
+				break;
 			case "hour":
+				break;
 			case "minute":
+				break;
 			case "second":
-				this.where += `${method.toUpperCase()}(`;
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 			case "now":
-				this.where += "NOW()";
 				break;
 			case "trim":
-				this.where += "TRIM(' ' FROM ";
-				this.Visit(params[0], context);
-				this.where += ")";
 				break;
 		}
 	}

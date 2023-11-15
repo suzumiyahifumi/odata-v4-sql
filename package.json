@@ -31,12 +31,16 @@
   },
   "homepage": "https://github.com/jaystack/odata-v4-sql#readme",
   "dependencies": {
+    "lodash": "^4.17.21",
+    "lodash-es": "^4.17.21",
     "odata-v4-literal": "^0.1.0",
-    "odata-v4-parser": "0.1.13"
+    "odata-v4-parser": "0.1.13",
+    "sequelize": "^6.32.1",
+    "sqlite3": "^5.1.6"
   },
   "devDependencies": {
     "chai": "^3.5.0",
-    "mocha": "^3.1.2",
+    "mocha": "^10.2.0",
     "typescript": "^2.5.1"
   }
 }
